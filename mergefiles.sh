@@ -26,6 +26,12 @@ log_error() {
   echo -e "${COLOR_ERROR}[ERROR]${COLOR_RESET} $1" >&2
 }
 
+# New function for skipped files (using red)
+log_skipped() {
+  echo -e "${COLOR_ERROR}[SKIP]${COLOR_RESET} $1"
+}
+
+
 # --- Argument Parsing and Validation ---
 SOURCE_DIR="$1"
 OUTPUT_FILE="$2"
@@ -43,7 +49,7 @@ if [ ! -d "$SOURCE_DIR" ]; then
   exit 1
 fi
 
-# Check if output directory is writable
+# Check if output directory is writable BEFORE checking the file itself
 OUTPUT_DIR=$(dirname "$OUTPUT_FILE")
 if [ ! -d "$OUTPUT_DIR" ]; then
     log_info "Output directory '$OUTPUT_DIR' does not exist. Creating it..."
@@ -58,22 +64,48 @@ if [ ! -w "$OUTPUT_DIR" ]; then
     exit 1
 fi
 
+# --- Overwrite Check --- <<< MODIFICATION START >>>
+if [ -f "$OUTPUT_FILE" ]; then
+    # Prompt the user using log_warning color for visibility
+    echo -e "${COLOR_WARNING}[WARN]${COLOR_RESET} Output file '${COLOR_FILE}$OUTPUT_FILE${COLOR_RESET}' already exists."
+    read -p "Do you want to overwrite it? [y/N]: " -n 1 -r REPLY # Read single char, no newline needed
+    echo # Move to new line after input
+    REPLY=${REPLY:-N} # Default to N if user just presses Enter
+    if [[ ! "$REPLY" =~ ^[Yy]$ ]]; then
+        log_info "Operation cancelled by user. Output file not overwritten."
+        exit 0 # Exit gracefully without error
+    else
+        log_info "User chose to overwrite. Proceeding..."
+        # If overwriting, clear or create the output file now
+        log_info "Initializing (overwriting) output file: ${COLOR_FILE}$OUTPUT_FILE${COLOR_RESET}"
+        > "$OUTPUT_FILE"
+        if [ $? -ne 0 ]; then
+            log_error "Failed to initialize (overwrite) output file '$OUTPUT_FILE'. Check permissions."
+            exit 1
+        fi
+    fi
+else
+    # File doesn't exist, initialize it
+    log_info "Initializing output file: ${COLOR_FILE}$OUTPUT_FILE${COLOR_RESET}"
+    > "$OUTPUT_FILE"
+    if [ $? -ne 0 ]; then
+        log_error "Failed to initialize output file '$OUTPUT_FILE'. Check permissions."
+        exit 1
+    fi
+fi
+# --- Overwrite Check --- <<< MODIFICATION END >>>
+
 # --- Initialization ---
 log_info "Starting file merge process."
 log_info "Source directory: ${COLOR_FILE}$SOURCE_DIR${COLOR_RESET}"
 log_info "Output file: ${COLOR_FILE}$OUTPUT_FILE${COLOR_RESET}"
 
-# Clear or create the output file
-log_info "Initializing output file: ${COLOR_FILE}$OUTPUT_FILE${COLOR_RESET}"
-> "$OUTPUT_FILE"
-if [ $? -ne 0 ]; then
-    log_error "Failed to initialize output file '$OUTPUT_FILE'. Check permissions."
-    exit 1
-fi
+# Output file is now initialized within the overwrite check logic above
 
 # --- File Processing ---
 COUNT=0
 PROCESSED_COUNT=0
+SKIPPED_COUNT=0 # Keep track of skipped files
 
 # Check if git is available and the source is inside a git repository
 USE_GIT_LS=0
@@ -105,6 +137,8 @@ log_info "Scanning for files..."
 # Process the files found by the chosen command
 # Use process substitution and NUL delimiters for robustness
 while IFS= read -r -d $'\0' FILE_PATH; do
+    COUNT=$((COUNT + 1)) # Count total files encountered
+
     # If using git ls-files, the path is relative to GIT_TOP_LEVEL, make it absolute
     if [ "$USE_GIT_LS" -eq 1 ]; then
        ABSOLUTE_FILE_PATH="$GIT_TOP_LEVEL/$FILE_PATH"
@@ -113,21 +147,31 @@ while IFS= read -r -d $'\0' FILE_PATH; do
     fi
 
     # Skip if it's the output file itself (can happen if output is within source)
+    # Use realpath to handle symlinks and ensure canonical paths match
     if [ "$(realpath "$ABSOLUTE_FILE_PATH")" == "$(realpath "$OUTPUT_FILE")" ]; then
-        log_warning "Skipping output file itself: ${COLOR_FILE}$ABSOLUTE_FILE_PATH${COLOR_RESET}"
+        log_skipped "Skipping output file itself: ${COLOR_FILE}$ABSOLUTE_FILE_PATH${COLOR_RESET}" # <<< MODIFIED: Use log_skipped
+        SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
         continue
     fi
 
     # Skip common binary file extensions quickly (optional optimization)
     # This is faster than running 'file' on everything, but less accurate
     if [[ "$ABSOLUTE_FILE_PATH" =~ \.(png|jpg|jpeg|gif|bmp|webp|svg|ttf|woff|woff2|tiff|ico|pdf|doc|docx|xls|xlsx|ppt|pptx|zip|gz|tar|tgz|bz2|rar|7z|exe|dll|so|dylib|o|a|class|jar|war|ear|mp3|mp4|avi|mov|wmv|flv|mkv|sqlite|db)$ ]]; then
-        log_info "Skipping file (by extension): ${COLOR_FILE}$ABSOLUTE_FILE_PATH${COLOR_RESET}"
+        log_skipped "Skipping file (by extension): ${COLOR_FILE}$ABSOLUTE_FILE_PATH${COLOR_RESET}" # <<< MODIFIED: Use log_skipped
+        SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
         continue
     fi
 
     # Check if it's a text file using 'file' command (more reliable)
+    # Ensure the file exists and is readable before checking mime type
+    if [ ! -r "$ABSOLUTE_FILE_PATH" ]; then
+        log_skipped "Skipping file (not readable): ${COLOR_FILE}$ABSOLUTE_FILE_PATH${COLOR_RESET}" # <<< MODIFIED: Use log_skipped
+        SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
+        continue
+    fi
     if file --mime-type "$ABSOLUTE_FILE_PATH" | grep -q 'charset=binary'; then
-        log_info "Skipping file (detected by 'file'): ${COLOR_FILE}$ABSOLUTE_FILE_PATH${COLOR_RESET}"
+        log_skipped "Skipping file (detected binary by 'file'): ${COLOR_FILE}$ABSOLUTE_FILE_PATH${COLOR_RESET}" # <<< MODIFIED: Use log_skipped
+        SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
         continue
     fi
 
@@ -155,10 +199,18 @@ while IFS= read -r -d $'\0' FILE_PATH; do
 done < <(eval "$FILE_LIST_CMD") # Process substitution with eval to handle quoted paths in command
 
 # --- Final Summary ---
+log_info "-------------------- Summary --------------------"
 if [ "$PROCESSED_COUNT" -eq 0 ]; then
-    log_warning "No text files were found or processed in '$SOURCE_DIR'."
+    log_warning "No text files were processed."
 else
     log_success "Merged $PROCESSED_COUNT text files into ${COLOR_FILE}$OUTPUT_FILE${COLOR_RESET}"
 fi
+
+if [ "$SKIPPED_COUNT" -gt 0 ]; then
+    log_warning "Skipped $SKIPPED_COUNT files (binary, output file, etc.)."
+fi
+
+log_info "Total files encountered in source: $COUNT"
+log_info "-----------------------------------------------"
 
 exit 0
