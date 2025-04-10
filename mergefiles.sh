@@ -64,7 +64,7 @@ if [ ! -w "$OUTPUT_DIR" ]; then
     exit 1
 fi
 
-# --- Overwrite Check --- <<< MODIFICATION START >>>
+# --- Overwrite Check ---
 if [ -f "$OUTPUT_FILE" ]; then
     # Prompt the user using log_warning color for visibility
     echo -e "${COLOR_WARNING}[WARN]${COLOR_RESET} Output file '${COLOR_FILE}$OUTPUT_FILE${COLOR_RESET}' already exists."
@@ -93,14 +93,11 @@ else
         exit 1
     fi
 fi
-# --- Overwrite Check --- <<< MODIFICATION END >>>
 
 # --- Initialization ---
 log_info "Starting file merge process."
 log_info "Source directory: ${COLOR_FILE}$SOURCE_DIR${COLOR_RESET}"
 log_info "Output file: ${COLOR_FILE}$OUTPUT_FILE${COLOR_RESET}"
-
-# Output file is now initialized within the overwrite check logic above
 
 # --- File Processing ---
 COUNT=0
@@ -149,7 +146,7 @@ while IFS= read -r -d $'\0' FILE_PATH; do
     # Skip if it's the output file itself (can happen if output is within source)
     # Use realpath to handle symlinks and ensure canonical paths match
     if [ "$(realpath "$ABSOLUTE_FILE_PATH")" == "$(realpath "$OUTPUT_FILE")" ]; then
-        log_skipped "Skipping output file itself: ${COLOR_FILE}$ABSOLUTE_FILE_PATH${COLOR_RESET}" # <<< MODIFIED: Use log_skipped
+        log_skipped "Skipping output file itself: ${COLOR_FILE}$ABSOLUTE_FILE_PATH${COLOR_RESET}"
         SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
         continue
     fi
@@ -157,7 +154,7 @@ while IFS= read -r -d $'\0' FILE_PATH; do
     # Skip common binary file extensions quickly (optional optimization)
     # This is faster than running 'file' on everything, but less accurate
     if [[ "$ABSOLUTE_FILE_PATH" =~ \.(png|jpg|jpeg|gif|bmp|webp|svg|ttf|woff|woff2|tiff|ico|pdf|doc|docx|xls|xlsx|ppt|pptx|zip|gz|tar|tgz|bz2|rar|7z|exe|dll|so|dylib|o|a|class|jar|war|ear|mp3|mp4|avi|mov|wmv|flv|mkv|sqlite|db)$ ]]; then
-        log_skipped "Skipping file (by extension): ${COLOR_FILE}$ABSOLUTE_FILE_PATH${COLOR_RESET}" # <<< MODIFIED: Use log_skipped
+        log_skipped "Skipping file (by extension): ${COLOR_FILE}$ABSOLUTE_FILE_PATH${COLOR_RESET}"
         SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
         continue
     fi
@@ -165,25 +162,26 @@ while IFS= read -r -d $'\0' FILE_PATH; do
     # Check if it's a text file using 'file' command (more reliable)
     # Ensure the file exists and is readable before checking mime type
     if [ ! -r "$ABSOLUTE_FILE_PATH" ]; then
-        log_skipped "Skipping file (not readable): ${COLOR_FILE}$ABSOLUTE_FILE_PATH${COLOR_RESET}" # <<< MODIFIED: Use log_skipped
+        log_skipped "Skipping file (not readable): ${COLOR_FILE}$ABSOLUTE_FILE_PATH${COLOR_RESET}"
         SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
         continue
     fi
     if file --mime-type "$ABSOLUTE_FILE_PATH" | grep -q 'charset=binary'; then
-        log_skipped "Skipping file (detected binary by 'file'): ${COLOR_FILE}$ABSOLUTE_FILE_PATH${COLOR_RESET}" # <<< MODIFIED: Use log_skipped
+        log_skipped "Skipping file (detected binary by 'file'): ${COLOR_FILE}$ABSOLUTE_FILE_PATH${COLOR_RESET}"
         SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
         continue
     fi
 
     # Calculate relative path for display header
     # Use realpath to handle potential symlinks and get canonical paths before stripping prefix
+    # For the header, we want the path relative to the source dir
     DISPLAY_PATH=$(realpath --relative-to="$SOURCE_DIR" "$ABSOLUTE_FILE_PATH")
 
-    PROCESSED_COUNT=$((PROCESSED_COUNT + 1))
+    PROCESSED_COUNT=$((PROCESSED_COUNT + 1)) # Still increment process count for logging
     log_info "Processing (${PROCESSED_COUNT}): ${COLOR_FILE}$DISPLAY_PATH${COLOR_RESET}"
 
     # Append file header and content to output file
-    echo "### File ${PROCESSED_COUNT}: ${DISPLAY_PATH}" >> "$OUTPUT_FILE"
+    echo "//File: ${DISPLAY_PATH}" >> "$OUTPUT_FILE"
     cat "$ABSOLUTE_FILE_PATH" >> "$OUTPUT_FILE"
     # Add a newline separator between files for readability
     echo -e "\n" >> "$OUTPUT_FILE"
